@@ -209,8 +209,10 @@ nav{height:var(--nav-h);padding:0 16px;background:var(--white);border-bottom:1px
 .back-link:active{opacity:.7}
 
 /* ── MODEL OVERLAY ── */
-.model-overlay{position:fixed;inset:0;background:rgba(15,31,61,.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:999;transition:opacity .4s}
-.model-overlay.hidden{opacity:0;pointer-events:none}
+.model-overlay{position:fixed;inset:0;background:rgba(15,31,61,.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:999;transition:opacity .5s ease, transform .55s cubic-bezier(.4,0,.2,1);transform:translateY(0)}
+.model-overlay.hidden{opacity:0;pointer-events:none;transform:translateY(-100%)}
+@keyframes overlayEntrance{from{opacity:0;transform:translateY(-18px)}to{opacity:1;transform:translateY(0)}}
+.model-box{animation:overlayEntrance .45s cubic-bezier(.22,1,.36,1) both}
 .model-box{background:white;border-radius:16px;padding:32px 36px;text-align:center;max-width:340px;width:88%;box-shadow:0 20px 60px rgba(15,31,61,.2)}
 .model-spinner{width:38px;height:38px;border-radius:50%;border:3px solid var(--blue-soft);border-top-color:var(--blue);animation:spin .8s linear infinite;margin:0 auto 18px}
 .model-title{font-weight:700;font-size:16px;color:var(--navy);margin-bottom:8px}
@@ -642,24 +644,17 @@ function startLiveOverlay(vid, overlayC) {
         const best = dets.reduce((a,b) =>
           b.detection.box.width*b.detection.box.height > a.detection.box.width*a.detection.box.height ? b : a
         );
-        const topEmo = Object.entries(best.expressions).sort((a,b)=>b[1]-a[1])[0];
-        const m = EMETA[topEmo[0]] || {color:'#2563eb'};
         const box = best.detection.box;
         const sx = overlayC.width / vid.videoWidth;
         const sy = overlayC.height / vid.videoHeight;
         const bx = overlayC.width - (box.x + box.width) * sx;
         const by = box.y * sy, bw = box.width * sx, bh = box.height * sy;
         const cs = Math.min(16, bw * 0.18);
-        ctx.strokeStyle = m.color; ctx.lineWidth = 2.5;
+        // Bracket corners only — no emotion label shown before capture
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 2.5;
         [[bx,by,1,1],[bx+bw,by,-1,1],[bx,by+bh,1,-1],[bx+bw,by+bh,-1,-1]].forEach(([x,y,dx,dy]) => {
           ctx.beginPath(); ctx.moveTo(x+dx*cs,y); ctx.lineTo(x,y); ctx.lineTo(x,y+dy*cs); ctx.stroke();
         });
-        const lbl = topEmo[0].charAt(0).toUpperCase()+topEmo[0].slice(1);
-        ctx.font = 'bold 11px Plus Jakarta Sans,sans-serif';
-        const tw = ctx.measureText(lbl).width;
-        ctx.fillStyle = m.color+'cc';
-        ctx.beginPath(); ctx.roundRect(bx, by-22, tw+12, 20, 4); ctx.fill();
-        ctx.fillStyle = 'white'; ctx.fillText(lbl, bx+6, by-7);
       }
     } catch(e) {}
     liveLoopId = requestAnimationFrame(loop);
@@ -670,53 +665,7 @@ function stopLiveOverlay() {
   if (liveLoopId) { cancelAnimationFrame(liveLoopId); liveLoopId = null; }
 }
 
-/* ══ PROCESSING PROGRESS BAR ══ */
-let progressInterval = null;
-function startProcessingBar(durationMs, stages, onComplete) {
-  const bar    = $('procBar');
-  const status = $('procStatus');
-  const wrap   = $('procWrap');
-  wrap.style.display = 'block';
-  bar.style.width = '0%';
-  bar.style.transition = 'none';
 
-  let elapsed = 0;
-  const TICK = 120; // ms per tick
-  let stageIdx = 0;
-
-  // Show first stage immediately
-  status.textContent = stages[0];
-
-  clearInterval(progressInterval);
-  progressInterval = setInterval(() => {
-    elapsed += TICK;
-    const pct = Math.min(97, (elapsed / durationMs) * 100);
-    bar.style.transition = `width ${TICK}ms linear`;
-    bar.style.width = pct + '%';
-
-    // Cycle stage messages
-    const newIdx = Math.floor((elapsed / durationMs) * stages.length);
-    if (newIdx !== stageIdx && newIdx < stages.length) {
-      stageIdx = newIdx;
-      status.textContent = stages[stageIdx];
-    }
-
-    if (elapsed >= durationMs) {
-      clearInterval(progressInterval);
-      bar.style.width = '100%';
-      status.textContent = '✓ Analysis complete';
-      setTimeout(() => {
-        wrap.style.display = 'none';
-        onComplete();
-      }, 300);
-    }
-  }, TICK);
-}
-function stopProcessingBar() {
-  clearInterval(progressInterval);
-  const wrap = $('procWrap');
-  if (wrap) wrap.style.display = 'none';
-}
 
 /* ══════════════════════════════════════════
    IMAGE PREPROCESSING
@@ -899,7 +848,7 @@ async function captureAndAnalyze() {
   toast('Photo captured! Deep analysis in progress…','info');
 
   // ── Short animation delay so progress bar feels responsive ──
-  const PROCESS_MS = 1000 + Math.floor(Math.random() * 1001); // 1000–2000 ms
+  const PROCESS_MS = 5000; // exactly 5 seconds processing animation
 
   const stages = [
     'Locating face region…',
@@ -909,15 +858,15 @@ async function captureAndAnalyze() {
     'Computing final emotion scores…',
   ];
 
-  // Start ensemble in background
+  // Start ensemble in background AND 5s timer — wait for BOTH
   const detectionPromise = runEnsembleDetection(rawFrames, snapC);
   const timerPromise     = new Promise(resolve => setTimeout(resolve, PROCESS_MS));
 
   startProcessingBar(PROCESS_MS, stages, () => {});
 
   try {
-    // Wait for detection; timer runs in background just for the progress bar animation
-    const result = await detectionPromise;
+    // Wait for BOTH detection and the full 5s animation to complete
+    const [result] = await Promise.all([detectionPromise, timerPromise]);
     stopProcessingBar();
     // Short dramatic pause before reveal
     await new Promise(r => setTimeout(r, 280));
